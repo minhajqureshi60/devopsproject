@@ -155,6 +155,21 @@ EOF
                 '''
             }
         }
+        stage('Trigger Deployment Pipeline') {
+            steps {
+                echo "Triggering deployment for image tag: ${IMAGE_TAG}"
+
+                build job: 'nginx-deployment',
+                    parameters: [
+                        string(
+                            name: 'IMAGE_TAG',
+                            value: "${IMAGE_TAG}"
+                        )
+                    ],
+                    wait: true,
+                    propagate: true
+            }
+        }
     }
 
     post {
