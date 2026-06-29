@@ -2,41 +2,115 @@ pipeline {
     agent any
 
     environment {
-        CONTAINER_NAME = 'my-public-nginx'
-        PUBLIC_IMAGE   = 'nginx:alpine'
-        HOST_PORT      = '80'
+        // Do not include https://
+        JFROG_REGISTRY   = 'yourcompany.jfrog.io'
+
+        // JFrog local Docker repository name
+        JFROG_REPOSITORY = 'docker-local'
+
+        IMAGE_NAME       = 'nginx-demo'
+        IMAGE_TAG        = "${BUILD_NUMBER}"
     }
 
     stages {
-        stage('Pull Public Image') {
+        stage('Checkout Source Code') {
             steps {
-                // Ensure the latest version of the public Nginx image is pulled
-                sh "docker pull ${PUBLIC_IMAGE}"
+                checkout scm
             }
         }
 
-        stage('Stop Existing Container') {
+        stage('Prepare Image Name') {
             steps {
-                // Safely remove any older running instance of the container
-                sh "docker stop ${CONTAINER_NAME} || true"
-                sh "docker rm ${CONTAINER_NAME} || true"
+                script {
+                    env.FULL_IMAGE = "${env.JFROG_REGISTRY}/${env.JFROG_REPOSITORY}/${env.IMAGE_NAME}:${env.IMAGE_TAG}"
+                    env.LATEST_IMAGE = "${env.JFROG_REGISTRY}/${env.JFROG_REPOSITORY}/${env.IMAGE_NAME}:latest"
+                }
+
+                echo "Image: ${env.FULL_IMAGE}"
             }
         }
 
-        stage('Deploy Nginx') {
+        stage('Build Docker Image') {
             steps {
-                // Run the official public image and expose it on the host port
-                sh "docker run -d -p ${HOST_PORT}:80 --name ${CONTAINER_NAME} ${PUBLIC_IMAGE}"
+                sh '''
+                    docker build \
+                      --tag "$FULL_IMAGE" \
+                      .
+                '''
+            }
+        }
+
+        stage('Validate Image') {
+            steps {
+                sh '''
+                    docker run --rm "$FULL_IMAGE" nginx -t
+                '''
+            }
+        }
+
+        stage('Tag Latest Image') {
+            steps {
+                sh '''
+                    docker tag "$FULL_IMAGE" "$LATEST_IMAGE"
+                '''
+            }
+        }
+
+        stage('Login to JFrog') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'jfrog-docker-credentials',
+                        usernameVariable: 'JFROG_USERNAME',
+                        passwordVariable: 'JFROG_PASSWORD'
+                    )
+                ]) {
+                    sh '''
+                        echo "$JFROG_PASSWORD" | \
+                        docker login "$JFROG_REGISTRY" \
+                          --username "$JFROG_USERNAME" \
+                          --password-stdin
+                    '''
+                }
+            }
+        }
+
+        stage('Push Image to JFrog') {
+            steps {
+                sh '''
+                    docker push "$FULL_IMAGE"
+                    docker push "$LATEST_IMAGE"
+                '''
+            }
+        }
+
+        stage('Display Image Information') {
+            steps {
+                echo """
+                Image successfully pushed:
+
+                ${env.FULL_IMAGE}
+                ${env.LATEST_IMAGE}
+                """
             }
         }
     }
 
     post {
         success {
-            echo "Public Nginx image successfully deployed on port ${HOST_PORT}!"
+            echo 'Docker image was successfully pushed to JFrog Artifactory.'
         }
+
         failure {
-            echo "Deployment failed. Please check the Docker logs."
+            echo 'The image build or push failed.'
+        }
+
+        always {
+            sh '''
+                docker logout "$JFROG_REGISTRY" || true
+                docker image rm "$FULL_IMAGE" || true
+                docker image rm "$LATEST_IMAGE" || true
+            '''
         }
     }
 }
