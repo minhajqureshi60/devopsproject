@@ -19,7 +19,7 @@ pipeline {
 
         IMAGE_NAME    = 'nginx-demo'
         CONTAINER_NAME = 'nginx-demo'
-        HOST_PORT      = '8080'
+        HOST_PORT      = '8000'
     }
 
     options {
