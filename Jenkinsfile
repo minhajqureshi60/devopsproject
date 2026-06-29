@@ -2,39 +2,96 @@ pipeline {
     agent any
 
     environment {
+        // Make Docker CLI available to Jenkins on macOS
         PATH = "/Applications/Docker.app/Contents/Resources/bin:/usr/local/bin:/opt/homebrew/bin:${env.PATH}"
 
-        // Do not include https://
+        // JFrog is running locally on the same Mac
         JFROG_REGISTRY   = 'localhost:8082'
-
-        // JFrog local Docker repository name
         JFROG_REPOSITORY = 'docker-local'
 
-        IMAGE_NAME       = 'nginx-demo'
-        IMAGE_TAG        = "${BUILD_NUMBER}"
+        IMAGE_NAME = 'nginx-demo'
+        IMAGE_TAG  = "${BUILD_NUMBER}"
+    }
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
     }
 
     stages {
-        stage('Checkout Source Code') {
+        stage('Verify Environment') {
             steps {
-                checkout scm
+                sh '''
+                    set -e
+
+                    echo "Jenkins user:"
+                    whoami
+
+                    echo "Docker executable:"
+                    which docker
+
+                    echo "Docker version:"
+                    docker --version
+
+                    echo "Checking Docker daemon:"
+                    docker info > /dev/null
+
+                    echo "Checking JFrog:"
+                    curl --fail \
+                      http://localhost:8082/artifactory/api/system/ping
+
+                    echo ""
+                    echo "Docker and JFrog are available."
+                '''
             }
         }
 
-        stage('Prepare Image Name') {
+        stage('Create Nginx Website') {
             steps {
-                script {
-                    env.FULL_IMAGE = "${env.JFROG_REGISTRY}/${env.JFROG_REPOSITORY}/${env.IMAGE_NAME}:${env.IMAGE_TAG}"
-                    env.LATEST_IMAGE = "${env.JFROG_REGISTRY}/${env.JFROG_REPOSITORY}/${env.IMAGE_NAME}:latest"
-                }
+                sh '''
+                    set -e
 
-                echo "Image: ${env.FULL_IMAGE}"
+                    mkdir -p website
+
+                    cat > website/index.html <<'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Jenkins Nginx Deployment</title>
+</head>
+<body>
+    <h1>Hello from Jenkins!</h1>
+    <p>This Nginx Docker image was built by Jenkins.</p>
+    <p>The image was pushed to JFrog Artifactory.</p>
+</body>
+</html>
+EOF
+
+                    cat > Dockerfile <<'EOF'
+FROM nginx:alpine
+
+COPY website/index.html /usr/share/nginx/html/index.html
+
+EXPOSE 80
+EOF
+
+                    echo "Created files:"
+                    find . -maxdepth 2 -type f -print
+                '''
             }
         }
 
         stage('Build Docker Image') {
             steps {
                 sh '''
+                    set -e
+
+                    FULL_IMAGE="$JFROG_REGISTRY/$JFROG_REPOSITORY/$IMAGE_NAME:$IMAGE_TAG"
+
+                    echo "Building image:"
+                    echo "$FULL_IMAGE"
+
                     docker build \
                       --tag "$FULL_IMAGE" \
                       .
@@ -42,18 +99,32 @@ pipeline {
             }
         }
 
-        stage('Validate Image') {
+        stage('Validate Docker Image') {
             steps {
                 sh '''
+                    set -e
+
+                    FULL_IMAGE="$JFROG_REGISTRY/$JFROG_REPOSITORY/$IMAGE_NAME:$IMAGE_TAG"
+
+                    echo "Checking Nginx configuration:"
                     docker run --rm "$FULL_IMAGE" nginx -t
                 '''
             }
         }
 
-        stage('Tag Latest Image') {
+        stage('Tag Latest') {
             steps {
                 sh '''
+                    set -e
+
+                    FULL_IMAGE="$JFROG_REGISTRY/$JFROG_REPOSITORY/$IMAGE_NAME:$IMAGE_TAG"
+                    LATEST_IMAGE="$JFROG_REGISTRY/$JFROG_REPOSITORY/$IMAGE_NAME:latest"
+
                     docker tag "$FULL_IMAGE" "$LATEST_IMAGE"
+
+                    echo "Created tags:"
+                    echo "$FULL_IMAGE"
+                    echo "$LATEST_IMAGE"
                 '''
             }
         }
@@ -68,8 +139,10 @@ pipeline {
                     )
                 ]) {
                     sh '''
-                        echo "$JFROG_PASSWORD" | \
-                        docker login "$JFROG_REGISTRY" \
+                        set -e
+
+                        echo "$JFROG_PASSWORD" | docker login \
+                          "$JFROG_REGISTRY" \
                           --username "$JFROG_USERNAME" \
                           --password-stdin
                     '''
@@ -80,39 +153,63 @@ pipeline {
         stage('Push Image to JFrog') {
             steps {
                 sh '''
+                    set -e
+
+                    FULL_IMAGE="$JFROG_REGISTRY/$JFROG_REPOSITORY/$IMAGE_NAME:$IMAGE_TAG"
+                    LATEST_IMAGE="$JFROG_REGISTRY/$JFROG_REPOSITORY/$IMAGE_NAME:latest"
+
+                    echo "Pushing build-number image:"
                     docker push "$FULL_IMAGE"
+
+                    echo "Pushing latest image:"
                     docker push "$LATEST_IMAGE"
                 '''
             }
         }
 
-        stage('Display Image Information') {
+        stage('Deployment Information') {
             steps {
-                echo """
-                Image successfully pushed:
+                sh '''
+                    FULL_IMAGE="$JFROG_REGISTRY/$JFROG_REPOSITORY/$IMAGE_NAME:$IMAGE_TAG"
+                    LATEST_IMAGE="$JFROG_REGISTRY/$JFROG_REPOSITORY/$IMAGE_NAME:latest"
 
-                ${env.FULL_IMAGE}
-                ${env.LATEST_IMAGE}
-                """
+                    echo "--------------------------------------------"
+                    echo "Images successfully pushed to JFrog:"
+                    echo "$FULL_IMAGE"
+                    echo "$LATEST_IMAGE"
+                    echo "--------------------------------------------"
+                '''
             }
         }
     }
 
     post {
         success {
-            echo 'Docker image was successfully pushed to JFrog Artifactory.'
+            echo 'Docker image was successfully built and pushed to JFrog.'
         }
 
         failure {
-            echo 'The image build or push failed.'
+            echo 'The Docker image build or push failed. Review the failed stage above.'
         }
 
         always {
             sh '''
+                FULL_IMAGE="$JFROG_REGISTRY/$JFROG_REPOSITORY/$IMAGE_NAME:$IMAGE_TAG"
+                LATEST_IMAGE="$JFROG_REGISTRY/$JFROG_REPOSITORY/$IMAGE_NAME:latest"
+
+                echo "Logging out from JFrog:"
                 docker logout "$JFROG_REGISTRY" || true
+
+                echo "Removing local image tags:"
                 docker image rm "$FULL_IMAGE" || true
                 docker image rm "$LATEST_IMAGE" || true
             '''
+
+            cleanWs(
+                deleteDirs: true,
+                disableDeferredWipeout: true,
+                notFailBuild: true
+            )
         }
     }
 }
