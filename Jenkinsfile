@@ -6,7 +6,8 @@ pipeline {
         PATH = "/Applications/Docker.app/Contents/Resources/bin:/usr/local/bin:/opt/homebrew/bin:${env.PATH}"
 
         // JFrog is running locally on the same Mac
-        JFROG_REGISTRY   = '192.168.68.58:8082'
+        JFROG_REGISTRY = 'host.docker.internal:8082'
+        JFROG_API_URL  = 'http://localhost:8082'
         JFROG_REPOSITORY = 'docker-local'
 
         IMAGE_NAME = 'nginx-demo'
