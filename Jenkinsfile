@@ -2,6 +2,8 @@ pipeline {
     agent any
 
     environment {
+        PATH = "/Applications/Docker.app/Contents/Resources/bin:/usr/local/bin:/opt/homebrew/bin:${env.PATH}"
+
         // Do not include https://
         JFROG_REGISTRY   = '172.20.10.2:8082'
 
