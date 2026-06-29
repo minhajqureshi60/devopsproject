@@ -19,32 +19,6 @@ pipeline {
     }
 
     stages {
-        stage('Verify Environment') {
-            steps {
-                sh '''
-                    set -e
-
-                    echo "Jenkins user:"
-                    whoami
-
-                    echo "Docker executable:"
-                    which docker
-
-                    echo "Docker version:"
-                    docker --version
-
-                    echo "Checking Docker daemon:"
-                    docker info > /dev/null
-
-                    echo "Checking JFrog:"
-                    curl --fail \
-                      http://localhost:8082/artifactory/api/system/ping
-
-                    echo ""
-                    echo "Docker and JFrog are available."
-                '''
-            }
-        }
 
         stage('Create Nginx Website') {
             steps {
